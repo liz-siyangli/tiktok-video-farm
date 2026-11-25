@@ -1,0 +1,44 @@
+# Giselle Select — 视频本地化配置
+
+brand = "Giselle Select"
+host = "Giselle"
+
+# Claude 模型（api 模式用）
+model = "claude-opus-5-5"
+
+# 英文 TTS 大约每秒 2.6 个词；用于给每句英文算"字数预算"
+words_per_second = 2.6
+# 期望保留的原内容比例（提示词里告诉 Claude）
+keep_ratio = 0.7
+
+# 品牌专属的本地化规则，会原样写进提示词，随时加
+localization_rules = [
+  "乌鲁木齐/新疆/东北 的寒冷天气 → Alaska / Minnesota winter，温度换成华氏度",
+  "南方/广州 的湿热天气 → Florida / Houston summer",
+  "上班通勤 → commuting to the office；逛街 → running errands / weekend brunch",
+  "提到价格时不说具体人民币，可以说 'super affordable' 或 'under $30'（只有确定价格时）",
+  "身高体重：把 cm / 斤 换成 feet-inches / lbs，例如 165cm 50kg → 5'5\", 110 lbs",
+]
+
+[tts]
+backend = "edge"              # edge（免费）| say（macOS 自带）| elevenlabs（付费，最自然）| dummy（测试）
+voice = "en-US-AvaNeural"     # edge 推荐女声：en-US-AvaNeural / en-US-EmmaNeural / en-US-JennyNeural
+base_rate = 5                 # 基础语速 +5%，TikTok 节奏偏快
+max_rate = 30                 # 装不下时最多再提速到 +30%
+max_atempo = 1.2              # 还装不下时，最多再整体加速 1.2 倍（不变调）
+
+[audio]
+original_volume = 0.0         # 原视频声音（中文人声）。0 = 静音；有背景音乐想保留可设 0.08 左右
+voice_volume = 1.0
+bgm_volume = 0.12             # 用 --bgm 指定背景音乐时的音量
+
+[mask]
+# 遮挡原视频里烧录的中文字幕（模糊一条横带）。先用 preview-mask 截图调准位置
+enabled = true
+y_ratio = 0.68                # 横带顶部在画面高度的 68% 处
+h_ratio = 0.18                # 横带高度 = 画面高度 18%
+
+[subtitle]
+font = "Inter"                # Mac 上可以用 "Helvetica Neue" / "Avenir Next"
+font_size_ratio = 0.042       # 字号 = 画面高度 × 4.2%
+y_ratio = 0.78                # 英文字幕中心位置（默认放在中文字幕原来的位置上）
