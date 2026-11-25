@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import json
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from .srt import Cue
@@ -26,13 +28,71 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
 
-def video_info(path: Path) -> tuple[int, int, float]:
+def probe(path: Path) -> dict:
+    """Display-oriented video facts. iPhone portrait .mov files are stored landscape with a
+    rotation tag; ffmpeg auto-rotates when decoding, so width/height here are what you see."""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
-         "-of", "default=nw=1", str(path)], check=True, capture_output=True, text=True,
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=codec_name,width,height,pix_fmt,color_transfer:stream_tags=rotate"
+         ":stream_side_data=rotation:format=duration",
+         "-of", "json", str(path)], check=True, capture_output=True, text=True,
     ).stdout
-    kv = dict(l.split("=", 1) for l in out.strip().splitlines() if "=" in l)
-    return int(kv["width"]), int(kv["height"]), float(kv["duration"])
+    data = json.loads(out)
+    st = data["streams"][0]
+    rot = 0
+    for sd in st.get("side_data_list", []) or []:
+        if "rotation" in sd:
+            rot = int(float(sd["rotation"]))
+    rot = rot or int(st.get("tags", {}).get("rotate", 0) or 0)
+    w, h = int(st["width"]), int(st["height"])
+    if abs(rot) % 180 == 90:
+        w, h = h, w
+    return {
+        "width": w, "height": h, "duration": float(data["format"]["duration"]),
+        "codec": st.get("codec_name", ""), "pix_fmt": st.get("pix_fmt", ""), "rotation": rot,
+        "hdr": st.get("color_transfer", "") in ("arib-std-b67", "smpte2084"),
+    }
+
+
+def video_info(path: Path) -> tuple[int, int, float]:
+    i = probe(path)
+    return i["width"], i["height"], i["duration"]
+
+
+def browser_friendly(info: dict) -> bool:
+    """Can Chrome/Safari play the original directly with correct colors?"""
+    return info["codec"] == "h264" and info["pix_fmt"] in ("yuv420p", "yuvj420p") and not info["hdr"]
+
+
+@lru_cache(maxsize=1)
+def _has_zscale() -> bool:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    return " zscale " in out
+
+
+def sdr_filter(info: dict) -> str:
+    """iPhone 'HDR video' (HLG) looks washed out if encoded to normal H.264 as-is: tone-map to SDR."""
+    if info["hdr"] and _has_zscale():
+        return ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+                "zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+    return "format=yuv420p"
+
+
+def output_size(w: int, h: int, short_side: int = 1080) -> tuple[int, int]:
+    """TikTok tops out at 1080p; rendering 4K is slow and wasted."""
+    scale = min(1.0, short_side / min(w, h))
+    return int(w * scale) // 2 * 2, int(h * scale) // 2 * 2
+
+
+def make_preview(src: Path, out: Path, info: dict) -> None:
+    """Small H.264 proxy for the browser preview (HEVC / HDR / ProRes sources)."""
+    w, h = output_size(info["width"], info["height"], 720)
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-vf", f"{sdr_filter(info)},scale={w}:{h}",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "128k",
+         "-movflags", "+faststart", str(out)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
 
 
 def has_audio(path: Path) -> bool:
@@ -74,17 +134,19 @@ def _escape_filter_path(p: Path) -> str:
 
 def render(video: Path, cues: list[Cue], vo: Path, out: Path, workdir: Path, cfg: dict,
            bgm: Path | None = None) -> None:
-    w, h, dur = video_info(video)
+    info = probe(video)
+    w, h = output_size(info["width"], info["height"])
+    dur = info["duration"]
     ass = workdir / "en.ass"
     write_ass(cues, ass, w, h, cfg)
 
     mask = cfg.get("mask", {})
-    vchain = "[0:v]"
-    vf = []
+    vf = [f"[0:v]{sdr_filter(info)},scale={w}:{h},setsar=1[src]"]
+    vchain = "[src]"
     if mask.get("enabled", True):
         y0 = int(h * mask.get("y_ratio", 0.70)) // 2 * 2
-        mh = int(h * mask.get("h_ratio", 0.16)) // 2 * 2
-        vf.append(f"[0:v]split[base][band]")
+        mh = min(h - y0, int(h * mask.get("h_ratio", 0.16))) // 2 * 2
+        vf.append(f"[src]split[base][band]")
         vf.append(f"[band]crop={w}:{mh}:0:{y0},boxblur=luma_radius=24:luma_power=3[blur]")
         vf.append(f"[base][blur]overlay=0:{y0}[masked]")
         vchain = "[masked]"
@@ -106,7 +168,7 @@ def render(video: Path, cues: list[Cue], vo: Path, out: Path, workdir: Path, cfg
 
     cmd = [
         "ffmpeg", "-y", *inputs, "-filter_complex", ";".join(vf + af),
-        "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+        "-map", "[v]", "-map", "[a]", "-map_metadata", "-1", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-t", f"{dur:.3f}", "-movflags", "+faststart",
         str(out),
     ]

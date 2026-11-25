@@ -83,6 +83,7 @@ async function openProject(id) {
   await flushSave();
   S.P = await api("GET", `/api/projects/${id}`);
   location.hash = id;
+  if (!S.P.preview) await runJob(`/api/projects/${id}/preview`, {}, "预览准备好了");
   $("#empty").hidden = true;
   $("#workspace").hidden = false;
   $("#projName").value = S.P.name;
@@ -104,17 +105,39 @@ async function reloadProject() {
   loadProjects();
 }
 
+function uploadWithProgress(file) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/projects");
+    const mb = (n) => (n / 1048576).toFixed(0);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) $("#jobText").textContent = `导入 ${file.name}：${mb(e.loaded)} / ${mb(e.total)} MB`;
+    };
+    xhr.upload.onload = () => ($("#jobText").textContent = "读取视频信息...");
+    xhr.onload = () => {
+      let data; try { data = JSON.parse(xhr.responseText); } catch { data = xhr.responseText; }
+      xhr.status < 300 ? resolve(data) : reject(new Error(data.detail || data || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error("上传失败"));
+    xhr.send(fd);
+  });
+}
+
 async function upload(file) {
   if (!file) return;
-  const fd = new FormData();
-  fd.append("file", file);
   $("#jobbar").hidden = false;
-  $("#jobText").textContent = `上传 ${file.name}...`;
   try {
-    const p = await api("POST", "/api/projects", fd, true);
+    const p = await uploadWithProgress(file);
+    $("#jobbar").hidden = true;
     await loadProjects();
+    if (!p.preview) {
+      S.P = p;
+      await runJob(`/api/projects/${p.id}/preview`, {}, "预览准备好了");
+    }
     await openProject(p.id);
-    toast("上传成功。先在「画面设置」里框好中文字幕的位置");
+    toast("导入成功。先在「画面设置」里框好中文字幕的位置");
   } catch (e) { toast(e.message, true); }
   $("#jobbar").hidden = true;
 }
@@ -123,7 +146,8 @@ async function upload(file) {
 function setVideoSource() {
   const P = S.P;
   const final = $("#showFinal").checked && P.output;
-  video.src = final ? `/media/${P.id}/${encodeURIComponent(P.output)}?t=${P.output_at || 0}` : `/media/${P.id}/${encodeURIComponent(P.video)}`;
+  const src = P.preview || P.video;
+  video.src = final ? `/media/${P.id}/${encodeURIComponent(P.output)}?t=${P.output_at || 0}` : `/media/${P.id}/${encodeURIComponent(src)}`;
   video.controls = true;
   video.muted = $("#dubPreview").checked && !final;
   const phone = $("#phone");

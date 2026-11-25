@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import translate as tr
 from ..cli import ROOT, load_cfg
-from ..render import render, video_info
+from ..render import browser_friendly, make_preview, probe, render
 from ..srt import Cue, read_srt, write_srt
 from ..tts import mix_track, slots_for, synth_line
 
@@ -178,17 +178,36 @@ async def create_project(file: UploadFile = File(...)):
     with src.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     try:
-        w, h, dur = video_info(src)
+        info = probe(src)
     except Exception:
         shutil.rmtree(d)
         raise HTTPException(400, "无法读取视频，请确认是 mp4/mov 文件")
     p = {
         "id": pid, "name": Path(file.filename or pid).stem, "video": src.name,
-        "width": w, "height": h, "duration": dur, "created": time.time(),
+        "width": info["width"], "height": info["height"], "duration": info["duration"], "created": time.time(),
+        "source_info": info,
+        # browser plays the original directly when it can; otherwise a 720p H.264 proxy is made
+        "preview": src.name if browser_friendly(info) else None,
         "settings": default_settings(), "zh": [], "en": [], "titles": [], "dropped_ids": [],
         "output": None, "bgm": None,
     }
     return save(p)
+
+
+@app.post("/api/projects/{pid}/preview")
+def build_preview(pid: str):
+    d = pdir(pid)
+
+    def work(job):
+        p = load(pid)
+        info = p.get("source_info") or probe(d / p["video"])
+        job["progress"] = "把 " + ("HDR " if info.get("hdr") else "") + f"{info.get('codec', '').upper()} 视频转成可预览格式（只影响预览，成片用原画质）..."
+        make_preview(d / p["video"], d / "preview.mp4", info)
+        p = load(pid)
+        p["preview"] = "preview.mp4"
+        save(p)
+
+    return start_job(pid, "preview", work)
 
 
 @app.get("/api/projects/{pid}")
