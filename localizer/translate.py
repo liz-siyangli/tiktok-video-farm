@@ -164,3 +164,28 @@ def save_outputs(result: dict, cues: list[Cue], workdir: Path, wps: float) -> li
         md += ["", "## 标题/文案建议", *[f"- {t}" for t in result["title_suggestions"]]]
     (workdir / "review.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return en
+
+
+def rewrite_line(zh: str, en: str, instruction: str, max_words: int, cfg: dict, model: str | None = None) -> str:
+    """Rewrite a single English VO line per the owner's instruction. Returns the new line only."""
+    import anthropic
+
+    system, _ = build_prompts([], cfg)
+    user = (
+        f"Original Chinese: {zh}\nCurrent English line: {en}\n"
+        f"Hard limit: {max_words} words.\nOwner's request: {instruction or 'make it more natural and punchy'}\n\n"
+        "Reply with only the new English line, nothing else."
+    )
+    client = anthropic.Anthropic()
+    resp = client.beta.messages.create(
+        model=model or cfg.get("model", "claude-opus-5-5"),
+        max_tokens=2000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low"},
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("Claude declined this rewrite")
+    return "".join(b.text for b in resp.content if b.type == "text").strip().strip('"')

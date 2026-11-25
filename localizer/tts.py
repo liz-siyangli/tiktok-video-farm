@@ -83,68 +83,82 @@ def atempo_chain(factor: float) -> str:
     return ",".join(parts)
 
 
-def synthesize_all(
-    cues: list[Cue], workdir: Path, video_duration: float, backend: str, voice: str,
-    base_rate: int = 0, max_rate: int = 30, max_atempo: float = 1.25, gap: float = 0.12,
-) -> list[Cue]:
-    """Returns cues re-timed to the actual spoken audio. Writes tts/*.wav, vo.wav, en.final.srt, tts_report.json."""
+def synth_line(
+    text: str, slot: float, wav: Path, backend: str, voice: str,
+    base_rate: int = 0, max_rate: int = 30, max_atempo: float = 1.25,
+) -> dict:
+    """Synthesize one line into `wav`, speeding it up to fit `slot` seconds if needed."""
     synth = BACKENDS[backend]
-    tdir = workdir / "tts"
-    tdir.mkdir(exist_ok=True)
-    timed: list[Cue] = []
-    report = []
+    wav.parent.mkdir(parents=True, exist_ok=True)
+    raw = wav.with_suffix(".raw.mp3")
+    rate = base_rate
+    synth(text, raw, voice, rate)
+    dur = probe_duration(raw)
 
-    for i, c in enumerate(cues):
-        nxt = cues[i + 1].start if i + 1 < len(cues) else video_duration
-        slot = max(0.3, nxt - c.start - gap)
-        raw = tdir / f"{c.index:03d}.raw.mp3"
-        wav = tdir / f"{c.index:03d}.wav"
+    # 1) ask the TTS engine itself to speak faster (sounds most natural)
+    if dur > slot:
+        rate = min(max_rate, math.ceil((dur / slot - 1) * 100) + base_rate + 3)
+        if rate > base_rate:
+            synth(text, raw, voice, rate)
+            dur = probe_duration(raw)
 
-        rate = base_rate
-        synth(c.text, raw, voice, rate)
-        dur = probe_duration(raw)
+    # 2) still too long -> time-stretch (keeps pitch) up to max_atempo
+    tempo = min(max_atempo, dur / slot) if dur > slot else 1.0
+    if tempo > 1.001:
+        run(["ffmpeg", "-y", "-i", str(raw), "-af", atempo_chain(tempo), "-ac", "1", "-ar", "44100", str(wav)])
+    else:
+        to_wav(raw, wav)
+    raw.unlink(missing_ok=True)
+    final = probe_duration(wav)
+    return {
+        "slot": round(slot, 2), "audio": round(final, 2), "rate_pct": rate,
+        "atempo": round(tempo, 3), "overflow": round(max(0.0, final - slot), 2),
+    }
 
-        # 1) ask the TTS engine itself to speak faster (sounds most natural)
-        if dur > slot:
-            need = math.ceil((dur / slot - 1) * 100) + base_rate + 3
-            rate = min(max_rate, need)
-            if rate > base_rate:
-                synth(c.text, raw, voice, rate)
-                dur = probe_duration(raw)
 
-        # 2) still too long -> time-stretch (keeps pitch) up to max_atempo
-        tempo = 1.0
-        if dur > slot:
-            tempo = min(max_atempo, dur / slot)
-        if tempo > 1.001:
-            run(["ffmpeg", "-y", "-i", str(raw), "-af", atempo_chain(tempo), "-ac", "1", "-ar", "44100", str(wav)])
-        else:
-            to_wav(raw, wav)
-        raw.unlink(missing_ok=True)
-        final = probe_duration(wav)
+def slots_for(starts: list[float], video_duration: float, gap: float = 0.12) -> list[float]:
+    """Available time for each line = until the next line starts (or the video ends)."""
+    out = []
+    for i, s in enumerate(starts):
+        nxt = starts[i + 1] if i + 1 < len(starts) else video_duration
+        out.append(max(0.3, nxt - s - gap))
+    return out
 
-        overflow = final - slot
-        report.append({
-            "id": c.index, "start": round(c.start, 2), "slot": round(slot, 2), "audio": round(final, 2),
-            "rate_pct": rate, "atempo": round(tempo, 3), "overflow": round(max(0, overflow), 2),
-            "text": c.text,
-        })
-        timed.append(Cue(c.index, c.start, c.start + final, c.text, meta={**c.meta, "wav": str(wav)}))
 
-    # mix every clip onto one track at its start time
-    vo = workdir / "vo.wav"
+def mix_track(clips: list[tuple[float, Path]], video_duration: float, out: Path) -> None:
+    """Place each (start_seconds, wav) clip on one mono track of length video_duration."""
+    if not clips:
+        run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{video_duration:.3f}", str(out)])
+        return
     inputs, filters = [], []
-    for k, c in enumerate(timed):
-        inputs += ["-i", c.meta["wav"]]
-        ms = int(c.start * 1000)
+    for k, (start, wav) in enumerate(clips):
+        inputs += ["-i", str(wav)]
+        ms = int(start * 1000)
         filters.append(f"[{k}:a]adelay={ms}|{ms}[a{k}]")
-    mix = "".join(f"[a{k}]" for k in range(len(timed)))
-    filters.append(f"{mix}amix=inputs={len(timed)}:normalize=0:dropout_transition=0,apad=whole_dur={video_duration:.3f}[out]")
-    script = workdir / "vo_filter.txt"
+    mix = "".join(f"[a{k}]" for k in range(len(clips)))
+    filters.append(
+        f"{mix}amix=inputs={len(clips)}:normalize=0:dropout_transition=0,apad=whole_dur={video_duration:.3f}[out]"
+    )
+    script = out.with_name(out.stem + "_filter.txt")
     script.write_text(";\n".join(filters), encoding="utf-8")
     run(["ffmpeg", "-y", *inputs, "-filter_complex_script", str(script), "-map", "[out]",
-         "-ac", "1", "-ar", "44100", "-t", f"{video_duration:.3f}", str(vo)])
+         "-ac", "1", "-ar", "44100", "-t", f"{video_duration:.3f}", str(out)])
 
+
+def synthesize_all(
+    cues: list[Cue], workdir: Path, video_duration: float, backend: str, voice: str,
+    base_rate: int = 0, max_rate: int = 30, max_atempo: float = 1.25,
+) -> list[Cue]:
+    """CLI path. Returns cues re-timed to the actual audio. Writes tts/*.wav, vo.wav, en.final.srt, tts_report.json."""
+    tdir = workdir / "tts"
+    slots = slots_for([c.start for c in cues], video_duration)
+    timed, report = [], []
+    for c, slot in zip(cues, slots):
+        wav = tdir / f"{c.index:03d}.wav"
+        info = synth_line(c.text, slot, wav, backend, voice, base_rate, max_rate, max_atempo)
+        report.append({"id": c.index, "start": round(c.start, 2), **info, "text": c.text})
+        timed.append(Cue(c.index, c.start, c.start + info["audio"], c.text, meta={**c.meta, "wav": str(wav)}))
+    mix_track([(c.start, Path(c.meta["wav"])) for c in timed], video_duration, workdir / "vo.wav")
     write_srt(timed, workdir / "en.final.srt")
     (workdir / "tts_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return timed

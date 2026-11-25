@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giselle Select · Localizer</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">G</span><b id="brand">Giselle Select</b><span class="muted">视频本地化工作台</span></div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <label class="upload" id="dropzone">
+      <input type="file" id="videoInput" accept="video/*" hidden>
+      <span class="plus">＋</span>
+      <span>上传中文视频</span>
+      <small class="muted">拖进来或点击选择</small>
+    </label>
+    <div class="section-title">项目</div>
+    <ul id="projects" class="projects"></ul>
+  </aside>
+
+  <main id="main">
+    <div class="empty" id="empty">
+      <h2>从左边上传一条以前拍的中文试穿视频开始</h2>
+      <ol>
+        <li><b>画面设置</b>：框出要遮住的中文字幕位置</li>
+        <li><b>中文字幕</b>：Whisper 自动识别，或上传剪映导出的 SRT</li>
+        <li><b>英文脚本</b>：Claude 翻译 + 删减 + 本土化，逐句修改</li>
+        <li><b>配音</b>：AI 英文配音，逐句试听、重新生成</li>
+        <li><b>成片</b>：一键合成，下载发 TikTok</li>
+      </ol>
+    </div>
+
+    <div class="workspace" id="workspace" hidden>
+      <section class="preview-col">
+        <div class="name-row">
+          <input id="projName" class="name-input" spellcheck="false">
+          <button class="icon-btn danger" id="delProject" title="删除项目">🗑</button>
+        </div>
+        <div class="phone" id="phone">
+          <video id="video" playsinline preload="metadata"></video>
+          <div class="mask-band" id="maskBand"></div>
+          <div class="sub-line" id="subLine"><span></span></div>
+        </div>
+        <div class="preview-controls">
+          <label class="toggle"><input type="checkbox" id="dubPreview"> 用英文配音预览（静音原声）</label>
+          <label class="toggle"><input type="checkbox" id="showFinal"> 看成片</label>
+        </div>
+        <div class="now-line muted" id="nowLine"></div>
+      </section>
+
+      <section class="steps-col">
+        <nav class="tabs" id="tabs">
+          <button data-tab="frame">1 画面设置</button>
+          <button data-tab="zh">2 中文字幕</button>
+          <button data-tab="en">3 英文脚本</button>
+          <button data-tab="tts">4 配音</button>
+          <button data-tab="out">5 成片</button>
+        </nav>
+        <div class="tab-body" id="tabBody"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="jobbar" id="jobbar" hidden><span class="spinner"></span><span id="jobText"></span></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

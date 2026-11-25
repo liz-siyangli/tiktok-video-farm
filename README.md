@@ -11,7 +11,30 @@
   │ 4. render     模糊遮掉中文字幕 + 烧录英文字幕 + 换成英文配音 → 成片 .en.mp4
 ```
 
-## 安装（Mac）
+## 网页版（推荐）
+
+在你自己的 Mac 上运行，用浏览器打开操作。视频和文件都留在本机，不需要服务器。
+
+**第一次准备**
+1. 安装 ffmpeg：终端运行 `brew install ffmpeg`（没有 brew 先装 https://brew.sh ）
+2. （可选）把 `.env.example` 复制成 `.env`，填上 `ANTHROPIC_API_KEY`。不填也能用「手动模式」走 claude.ai
+3. 在 Finder 里**右键 → 打开** `启动.command`（第一次需要右键，之后双击即可），会自动装依赖并打开浏览器
+
+**页面里的 5 步**
+
+| 步骤 | 你能做的 |
+|---|---|
+| 1 画面设置 | 拖滑块框住要模糊掉的中文字幕，实时预览英文字幕的位置和字号 |
+| 2 中文字幕 | Whisper 自动识别 / 上传剪映 SRT；逐句改错字，点时间跳到对应画面 |
+| 3 英文脚本 | Claude 一键生成（或复制提示词到 claude.ai 再粘贴回来）；逐句改文字和时间、看词数是否超长、「AI 改写」（更短 / 更口语 / 开头更抓人 / 自定义要求）、插入或删除句子 |
+| 4 配音 | 选引擎和声音、调语速；只重新生成改过的句子；逐句试听；勾选「用英文配音预览」直接边看视频边听；加背景音乐 |
+| 5 成片 | 一键合成，在线播放，下载 MP4 / 英文 SRT，附 TikTok 标题建议 |
+
+项目都保存在 `work/` 文件夹，关掉再打开会接着上次的进度。
+
+## 命令行版（批量处理用）
+
+### 安装（Mac）
 
 ```bash
 brew install ffmpeg
@@ -20,7 +43,7 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY=sk-ant-...      # 只有 api 模式需要
 ```
 
-## 用法
+### 用法
 
 ```bash
 # 一键跑完（Claude API + 免费 Edge 配音）
@@ -36,7 +59,7 @@ python -m localizer render videos/a.mp4 --bgm music/lofi.mp3
 #   → work/a/a.en.mp4
 ```
 
-### 不想付 API 费用：manual 模式
+#### 不想付 API 费用：manual 模式
 
 ```bash
 python -m localizer translate videos/a.mp4 --mode manual
